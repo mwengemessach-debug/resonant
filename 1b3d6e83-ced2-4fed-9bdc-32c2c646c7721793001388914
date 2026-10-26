@@ -1,0 +1,49 @@
+import crypto from 'crypto';
+
+const timeout = (ms=5000)=>AbortSignal.timeout(ms);
+const jsonHeaders={'Content-Type':'application/json'};
+const urls={
+  acestep: process.env.ACE_STEP_URL || 'http://127.0.0.1:8001',
+  yue: process.env.YUE_URL || 'http://127.0.0.1:8010',
+  musicgen: process.env.MUSICGEN_URL || 'http://127.0.0.1:8020'
+};
+const trim=u=>u.replace(/\/$/,'');
+async function request(url,options={}){const r=await fetch(url,{...options,signal:timeout(options.timeout||10000)});const text=await r.text();let data;try{data=JSON.parse(text)}catch{data=text}if(!r.ok)throw new Error(typeof data==='string'?data:data?.detail||data?.error||`HTTP ${r.status}`);return data}
+const first=(...v)=>v.find(x=>x!==undefined&&x!==null);
+
+export const engineCatalog=[
+ {id:'acestep',name:'ACE-Step 1.5',role:'Full song + vocals',license:'MIT; verify downloaded weights',commercial:true},
+ {id:'yue',name:'YuE2',role:'Symbolic planning + full song',license:'Code Apache-2.0; weights CC BY-NC 4.0',commercial:false},
+ {id:'musicgen',name:'MusicGen',role:'Instrumental texture candidate',license:'Code MIT; weights CC BY-NC 4.0',commercial:false}
+];
+
+export async function engineHealth(id){
+ const base=trim(urls[id]); const paths=id==='acestep'?['/health','/v1/models']:id==='yue'?['/health/ready','/health/live']:['/health'];
+ for(const p of paths)try{await request(base+p,{timeout:2500});return {available:true,url:base}}catch{}
+ return {available:false,url:base};
+}
+export async function allEngineHealth(){return Promise.all(engineCatalog.map(async e=>({...e,...await engineHealth(e.id)})))}
+
+export async function submitEngine(id,plan){
+ const base=trim(urls[id]);
+ if(id==='acestep'){
+  const data=await request(base+'/release_task',{method:'POST',headers:jsonHeaders,body:JSON.stringify({prompt:plan.prompt,lyrics:plan.instrumental?'[Instrumental]':(plan.lyrics||''),instrumental:plan.instrumental,bpm:plan.bpm,audio_duration:plan.length_range?.[1]||180,audio_format:'wav',thinking:true,use_format:true,batch_size:1}),timeout:30000});
+  const taskId=first(data?.data?.task_id,data?.task_id,data?.job_id);if(!taskId)throw new Error('ACE-Step returned no task ID');return {taskId};
+ }
+ if(id==='yue'){
+  const data=await request(base+'/v1/jobs',{method:'POST',headers:{...jsonHeaders,'Idempotency-Key':crypto.randomUUID()},body:JSON.stringify({prompt:plan.prompt,style_prompt:plan.prompt,lyrics:plan.instrumental?'[Instrumental]':(plan.lyrics||''),duration:plan.length_range?.[1]||180,n:1}),timeout:30000});
+  const taskId=first(data?.id,data?.job_id,data?.task_id);if(!taskId)throw new Error('YuE returned no job ID');return {taskId};
+ }
+ const data=await request(base+'/v1/jobs',{method:'POST',headers:jsonHeaders,body:JSON.stringify({prompt:plan.prompt,duration:Math.min(30,plan.length_range?.[1]||30),model:'facebook/musicgen-melody'}),timeout:30000});
+ const taskId=first(data?.id,data?.job_id,data?.task_id);if(!taskId)throw new Error('MusicGen returned no job ID');return {taskId};
+}
+
+export async function pollEngine(id,taskId){
+ const base=trim(urls[id]);
+ if(id==='acestep'){
+  const d=await request(base+'/query_result',{method:'POST',headers:jsonHeaders,body:JSON.stringify({task_id_list:[taskId]}),timeout:10000});const row=Array.isArray(d?.data)?d.data[0]:Array.isArray(d)?d[0]:d?.data||d;const code=Number(first(row?.status,0));const file=first(row?.file,row?.audio_url,row?.result?.audio_url);return {status:code===1?'succeeded':code===2?'failed':'running',progress:code===1?100:45,audioUrl:file?new URL(file,base).href:undefined,error:row?.error};
+ }
+ const d=await request(base+`/v1/jobs/${encodeURIComponent(taskId)}`,{timeout:10000});const raw=String(first(d?.status,d?.state,'running')).toLowerCase();const status=['succeeded','success','completed'].includes(raw)?'succeeded':['failed','error','cancelled'].includes(raw)?'failed':raw==='queued'?'queued':'running';let audioUrl=first(d?.audio_url,d?.result?.audio_url,d?.output?.audio_url);if(!audioUrl&&status==='succeeded')audioUrl=id==='yue'?`${base}/v1/jobs/${encodeURIComponent(taskId)}/audio`:`${base}/v1/jobs/${encodeURIComponent(taskId)}/audio`;return {status,progress:status==='succeeded'?100:status==='queued'?15:60,audioUrl,error:d?.error};
+}
+
+export function allowedEngineUrl(value){try{const target=new URL(value);return Object.values(urls).some(base=>{const b=new URL(base);return target.protocol===b.protocol&&target.host===b.host})}catch{return false}}

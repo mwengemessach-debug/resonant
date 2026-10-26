@@ -1,0 +1,51 @@
+"""Minimal local REST wrapper for Meta AudioCraft MusicGen.
+Install separately: pip install fastapi uvicorn torch torchaudio audiocraft
+Released model weights are CC BY-NC 4.0; do not use them commercially.
+"""
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from uuid import uuid4
+import os
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+app=FastAPI(title="Resonant MusicGen adapter")
+OUT=Path(os.getenv("MUSICGEN_OUTPUT_DIR","./musicgen-output"));OUT.mkdir(parents=True,exist_ok=True)
+jobs={};pool=ThreadPoolExecutor(max_workers=1);model=None
+class Request(BaseModel):
+    prompt:str=Field(min_length=1,max_length=2000)
+    duration:float=Field(default=30,ge=1,le=30)
+    model:str="facebook/musicgen-melody"
+
+def run(job_id:str,request:Request):
+    global model
+    try:
+        jobs[job_id]["status"]="running"
+        from audiocraft.models import MusicGen
+        from audiocraft.data.audio import audio_write
+        if model is None:model=MusicGen.get_pretrained(request.model)
+        model.set_generation_params(duration=request.duration)
+        wav=model.generate([request.prompt],progress=True)[0].cpu()
+        base=OUT/job_id;audio_write(str(base),wav,model.sample_rate,strategy="loudness",loudness_compressor=True)
+        jobs[job_id].update(status="succeeded",path=str(base)+".wav")
+    except Exception as exc:jobs[job_id].update(status="failed",error=str(exc))
+
+@app.get('/health')
+def health():return {"status":"ready","model_loaded":model is not None}
+@app.post('/v1/jobs',status_code=202)
+def create(req:Request):
+    job_id=str(uuid4());jobs[job_id]={"id":job_id,"status":"queued"};pool.submit(run,job_id,req);return jobs[job_id]
+@app.get('/v1/jobs/{job_id}')
+def status(job_id:str):
+    if job_id not in jobs:raise HTTPException(404,"Job not found")
+    return jobs[job_id]
+@app.get('/v1/jobs/{job_id}/audio')
+def audio(job_id:str):
+    job=jobs.get(job_id)
+    if not job or job.get("status")!="succeeded":raise HTTPException(404,"Audio not ready")
+    return FileResponse(job["path"],media_type="audio/wav",filename=f"{job_id}.wav")
+
+if __name__=='__main__':
+    import uvicorn
+    uvicorn.run(app,host='0.0.0.0',port=int(os.getenv('PORT','8020')))

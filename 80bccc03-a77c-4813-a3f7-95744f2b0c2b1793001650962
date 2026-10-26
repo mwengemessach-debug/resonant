@@ -1,0 +1,96 @@
+# Resonant — AI Music Producer
+
+A mobile-first music production workspace built around the official Treblo Melodia API and transparent, non-destructive browser DSP.
+
+## What is real
+
+- **Open-model ensemble:** health-checks and orchestrates local ACE-Step 1.5, YuE2 and MusicGen services, persists each result, performs real signal analysis, and ranks candidates without pretending to judge artistic quality. ACE-Step is enabled for general use; non-commercial research weights require an explicit opt-in.
+- **Official Treblo integration:** optional v3 text generation, v3 reference generation, v3 extension, legacy v2 single-section inpainting, uploads, task polling, alignment status, streaming readiness, credit verification, and immediate persistence of temporary output URLs.
+- **Producer director:** Google Gemini can translate structured creative direction into an exact, model-agnostic generation plan. Structured JSON output is validated and merged with deterministic safety bounds; when Gemini is unavailable, the inspectable local planner takes over. The text model is never represented as having listened to audio.
+- **Audio analysis:** the browser decodes the actual audio and measures peak, RMS, crest factor, clipped samples, channel width and a clearly labelled brightness proxy.
+- **Reversible mastering:** Web Audio offline rendering with low-shelf EQ, presence EQ, compression and output trim. Original audio is never overwritten. WAV export is local and free.
+- **Graceful quota behavior:** generation is locked unless the server can verify a Treblo key and balance. Import, analysis, mastering and WAV export continue to work without Treblo.
+
+## Setup
+
+```bash
+cp .env.example .env
+# Add TREBLO_API_KEY and/or GEMINI_API_KEY to the server environment.
+# Never expose either secret as VITE_*.
+npm install
+npm run dev
+```
+
+The UI runs on port 5173 and proxies API requests to the server on port 8787. For production:
+
+```bash
+npm run build
+NODE_ENV=production npm start
+```
+
+## Treblo facts verified 26 October 2026
+
+- API base: `https://api.treblo.com/v1`
+- Each v3 generation/reference/extension request costs 100 credits.
+- The published free trial provides 3,000 credits after card verification; the API must not be represented as unconditionally free.
+- Uploads are limited to 40 MB and expire after about 24 hours.
+- Generated song URLs are temporary and may be deleted after 168 hours, so the server persists successful results immediately.
+- User-facing implementations require a prominent “Powered by Treblo” link.
+- API outputs may be used commercially under Treblo’s current API Terms, subject to rights in user inputs and applicable law. Outputs may not be unique or copyrightable.
+
+Always re-check [pricing](https://treblo.com/developers/pricing), [documentation](https://treblo.com/developers/docs), and [API Terms](https://treblo.com/api-terms) before production launch.
+
+## Local model ensemble
+
+Resonant never downloads multi-gigabyte model weights into the web process. Run each engine as an isolated service and configure its private URL in `.env`.
+
+### ACE-Step 1.5 — recommended primary
+
+```bash
+git clone https://github.com/ACE-Step/ACE-Step-1.5.git
+cd ACE-Step-1.5
+uv sync
+uv run acestep-api  # http://127.0.0.1:8001
+```
+
+The integration uses the official asynchronous `/release_task`, `/query_result`, and `/v1/audio` flow. Model downloads occur on first engine startup.
+
+### YuE2 — research mode
+
+Use a YuE2 service implementing the documented `POST /v1/jobs`, `GET /v1/jobs/{id}`, and `GET /v1/jobs/{id}/audio` contract, such as YuE2-Turbo. Configure `YUE_URL`. YuE2 code and weight licenses differ; current CC BY-NC weights are not silently used for commercial projects.
+
+### MusicGen — research instrumentals
+
+A minimal AudioCraft adapter is included:
+
+```bash
+python -m venv .venv-musicgen
+. .venv-musicgen/bin/activate
+pip install fastapi uvicorn torch torchaudio audiocraft
+python engines/musicgen_server.py  # http://127.0.0.1:8020
+```
+
+MusicGen is capped at 30 seconds per candidate and treated as an instrumental texture model. Its released weights are CC BY-NC 4.0.
+
+### “Best” selection
+
+The selector measures decoded candidate audio for clipping, peak margin, crest factor and stereo width. It picks the healthiest signal as a starting point and exposes every candidate for human comparison. It does **not** claim to hear emotion, rate hooks, predict hits, or prove one composition is objectively best.
+
+## Optional production audio stack
+
+The default experience requires no GPU and performs DSP in-browser. For server-side batch mastering and additional encoders, install FFmpeg. Demucs is intentionally not auto-installed or enabled: it should only be surfaced after CPU/GPU capacity, queue limits and privacy controls are verified.
+
+## Security and privacy
+
+- The Treblo key exists only in the Node process environment.
+- Reference uploads are removed from temporary disk after forwarding.
+- Only `treblo.com` result URLs may be fetched by the persistence endpoint (SSRF guard).
+- Persisted audio lives under `data/audio`; use encrypted object storage and signed application URLs in a multi-user deployment.
+- Project files are local JSON for this single-tenant build. Add authentication and per-user authorization before public deployment.
+
+## Tests
+
+```bash
+npm test
+npm run build
+```

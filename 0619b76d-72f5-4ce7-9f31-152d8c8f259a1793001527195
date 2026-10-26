@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import{brainStatus,buildBrainPlan}from'../server/gemini.js';
+test('Gemini brain has an honest deterministic fallback',async()=>{const old=process.env.GEMINI_API_KEY;delete process.env.GEMINI_API_KEY;const plan=await buildBrainPlan({genre:'soul',lyrics:'exact words'});assert.equal(plan.lyrics,'exact words');assert.equal(plan.brain.used,false);assert.equal(brainStatus().audioListening,false);if(old)process.env.GEMINI_API_KEY=old});

@@ -1,0 +1,20 @@
+import { buildProductionPlan } from './producer.js';
+
+const MODEL=process.env.GEMINI_MODEL||'gemini-3.8-flash';
+const API='https://generativelanguage.googleapis.com/v1beta/models';
+const clean=(v,n=10000)=>String(v||'').trim().slice(0,n);
+const jsonSchema={
+ type:'OBJECT',required:['prompt','rationale'],properties:{
+  prompt:{type:'STRING'},genreSummary:{type:'STRING'},moodSummary:{type:'STRING'},arrangementNotes:{type:'STRING'},productionNotes:{type:'STRING'},negativeTags:{type:'ARRAY',items:{type:'STRING'}},rationale:{type:'ARRAY',items:{type:'STRING'}}
+ }
+};
+function extract(data){const text=data?.candidates?.[0]?.content?.parts?.map(p=>p.text||'').join('');if(!text)throw new Error('Gemini returned no production plan.');return JSON.parse(text)}
+export function brainStatus(){return {provider:'Google Gemini',model:MODEL,connected:Boolean(process.env.GEMINI_API_KEY),role:'Text-only producer director',audioListening:false}}
+export async function buildBrainPlan(brief={}){
+ const fallback=buildProductionPlan(brief),key=process.env.GEMINI_API_KEY;if(!key)return {...fallback,brain:{used:false,provider:'deterministic fallback',reason:'GEMINI_API_KEY is not configured'}};
+ const safeBrief={genre:clean(brief.genre,200),mood:clean(brief.mood,240),story:clean(brief.story,1000),instruments:clean(brief.instruments,500),tempo:Number(brief.tempo)||100,rhythm:clean(brief.rhythm,500),vocal:clean(brief.vocal,500),melody:clean(brief.melody,500),arrangement:clean(brief.arrangement,800),production:clean(brief.production,800),lyrics:clean(brief.lyrics),instrumental:Boolean(brief.instrumental),duration:Number(brief.duration)||180,hasReference:Boolean(brief.referenceUploadId)};
+ const instruction=`You are a music production director. Convert the user's structured brief into a precise model-agnostic song-generation plan. Preserve supplied lyrics exactly; do not rewrite or quote them in the prompt. Never claim to have heard, listened to, or analyzed audio. Do not imitate or name a living artist. Describe measurable production choices, arrangement, melody contour, groove, instrumentation, and vocal character. Return JSON matching the schema. Keep prompt under 1800 characters and rationale to 3-5 concise items. User brief: ${JSON.stringify(safeBrief)}`;
+ const response=await fetch(`${API}/${encodeURIComponent(MODEL)}:generateContent`,{method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':key},body:JSON.stringify({contents:[{role:'user',parts:[{text:instruction}]}],generationConfig:{temperature:.35,responseMimeType:'application/json',responseJsonSchema:jsonSchema}}),signal:AbortSignal.timeout(30000)});
+ const body=await response.text();let data;try{data=JSON.parse(body)}catch{data={}}if(!response.ok)throw new Error(data?.error?.message||`Gemini returned ${response.status}`);const ai=extract(data);
+ return {...fallback,prompt:clean(ai.prompt,1800)||fallback.prompt,rationale:Array.isArray(ai.rationale)?ai.rationale.slice(0,5).map(x=>clean(x,240)):fallback.rationale,negative_tags:Array.isArray(ai.negativeTags)?ai.negativeTags.slice(0,12).map(x=>clean(x,80)):undefined,brain:{used:true,provider:'Google Gemini',model:MODEL,audioListening:false}};
+}

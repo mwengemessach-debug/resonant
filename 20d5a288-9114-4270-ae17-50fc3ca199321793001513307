@@ -1,0 +1,5 @@
+import { useEffect, useRef } from 'react';
+export default function Waveform({buffer,color='#c8ff3d'}){
+ const ref=useRef(); useEffect(()=>{if(!buffer||!ref.current)return; const c=ref.current, dpr=devicePixelRatio||1, w=c.clientWidth*dpr,h=c.clientHeight*dpr;c.width=w;c.height=h;const x=c.getContext('2d');x.clearRect(0,0,w,h);const data=buffer.getChannelData(0),step=Math.ceil(data.length/w);x.strokeStyle=color;x.lineWidth=1*dpr;x.beginPath();for(let i=0;i<w;i++){let min=1,max=-1;for(let j=0;j<step;j++){const v=data[i*step+j]||0;if(v<min)min=v;if(v>max)max=v}x.moveTo(i,(1+min)*h/2);x.lineTo(i,(1+max)*h/2)}x.stroke()},[buffer,color]);
+ return <canvas className="waveform" ref={ref}/>;
+}

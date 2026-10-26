@@ -1,0 +1,75 @@
+const clean = (value, max = 1200) => String(value || '').trim().slice(0, max);
+
+export function buildProductionPlan(brief = {}) {
+  const genre = clean(brief.genre, 120) || 'genre-fluid contemporary';
+  const mood = clean(brief.mood, 160) || 'emotionally engaging';
+  const bpm = Math.max(40, Math.min(220, Number(brief.tempo) || 100));
+  const instrumental = Boolean(brief.instrumental);
+  const duration = Math.max(30, Math.min(270, Number(brief.duration) || 180));
+  const rounded = Math.round(duration / 30) * 30;
+  const details = [
+    `${genre} song`, `${mood} mood`, `${bpm} BPM`,
+    clean(brief.story) && `story: ${clean(brief.story, 400)}`,
+    clean(brief.instruments) && `instrumentation: ${clean(brief.instruments, 240)}`,
+    clean(brief.rhythm) && `rhythm and groove: ${clean(brief.rhythm, 200)}`,
+    !instrumental && clean(brief.vocal) && `vocal character: ${clean(brief.vocal, 200)}`,
+    clean(brief.melody) && `melody direction: ${clean(brief.melody, 240)}`,
+    clean(brief.arrangement) && `arrangement: ${clean(brief.arrangement, 300)}`,
+    clean(brief.production) && `production: ${clean(brief.production, 300)}`,
+    'complete song with intentional transitions, a memorable recurring motif, natural dynamics, and a resolved ending'
+  ].filter(Boolean);
+
+  return {
+    version: 1,
+    mode: brief.referenceUploadId ? 'reference' : 'generate',
+    prompt: details.join('. ') + '.',
+    lyrics: instrumental ? undefined : (clean(brief.lyrics, 10000) || undefined),
+    tags: [genre, mood].filter(Boolean),
+    instrumental,
+    bpm,
+    length_range: [Math.max(0, rounded - 30), Math.min(300, rounded + 30)],
+    reference_scale: Math.max(1, Math.min(5, Number(brief.referenceStrength) || 1.8)),
+    output_format: 'wav',
+    align_lyrics: !instrumental,
+    enable_streaming: true,
+    rationale: [
+      `Anchored at ${bpm} BPM for the requested groove.`,
+      brief.referenceUploadId ? 'Reference conditioning enabled; strength remains adjustable.' : 'Text-led generation; Treblo infers detailed style tags.',
+      brief.lyrics ? 'Provided lyrics are sent verbatim where the model supports alignment.' : instrumental ? 'Instrumental mode prevents lyric generation.' : 'Lyrics may be inferred from the story and production brief.',
+      'Mastering remains a separate, reversible stage after real audio analysis.'
+    ]
+  };
+}
+
+export function makeTrebloPayload(plan, brief = {}) {
+  const payload = {
+    prompt: plan.prompt,
+    instrumental: plan.instrumental,
+    length_range: plan.length_range,
+    output_format: plan.output_format,
+    enable_streaming: true,
+    stream_format: 'mp3',
+    align_lyrics: plan.align_lyrics
+  };
+  if (plan.lyrics) payload.lyrics = plan.lyrics;
+  // Leave prompt/style strengths at Treblo defaults unless the user explicitly overrides.
+  if (Array.isArray(plan.negative_tags) && plan.negative_tags.length) payload.negative_tags = plan.negative_tags;
+  else if (brief.negativeTags) payload.negative_tags = clean(brief.negativeTags, 300).split(',').map(x => x.trim()).filter(Boolean);
+  if (plan.mode === 'reference') {
+    payload.audio_upload_id = brief.referenceUploadId;
+    payload.reference_scale = plan.reference_scale;
+    if (Number.isFinite(Number(brief.referenceStart)) && Number.isFinite(Number(brief.referenceEnd))) {
+      const start = Number(brief.referenceStart), end = Number(brief.referenceEnd);
+      if (end - start >= 12 && end - start <= 165) {
+        payload.reference_crop_start = start;
+        payload.reference_crop_end = end;
+      }
+    }
+  }
+  return payload;
+}
+
+export function statusProgress(status) {
+  const map = {RECEIVED:4, TRANSCRIBE_TASK_STARTED:8, TRANSCRIBE_STAGE_1:12, TRANSCRIBE_STAGE_2:16, TRANSCRIBE_STAGE_3:20, TRANSCRIBE_DONE:24, PROMPT:30, TASK_SENT:38, GENERATE_TASK_STARTED:45, LOADING_SOURCE:48, BEGINNING_GENERATION:52, GENERATING:68, GENERATING_STREAMING_READY:72, DECOMPRESSING:84, SAVING:92, SUCCESS:100, FAILURE:100};
+  return map[status] ?? 2;
+}
